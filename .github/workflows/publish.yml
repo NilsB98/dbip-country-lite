@@ -1,0 +1,87 @@
+name: publish
+
+on:
+  schedule:
+    # DB-IP publishes a new release in the first days of each month; the
+    # second run catches a late release.
+    - cron: "17 5 3,10 * *"
+  # Publishes the current month if its tag doesn't exist yet.
+  push:
+    branches: [main]
+    paths: [Dockerfile, .github/workflows/publish.yml]
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Release to publish (YYYY-MM), default: current month"
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/dbip-country-lite
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Pick release
+        id: release
+        run: |
+          month="${{ inputs.month }}"
+          month="${month:-$(date -u +%Y-%m)}"
+          [[ "$month" =~ ^[0-9]{4}-[0-9]{2}$ ]] || { echo "bad month: $month"; exit 1; }
+          image="${IMAGE,,}"
+          echo "month=$month" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "$image:$month" >/dev/null 2>&1; then
+            echo "$image:$month already exists"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download
+        if: steps.release.outputs.skip != 'true'
+        id: download
+        run: |
+          url="https://download.db-ip.com/free/dbip-country-lite-${{ steps.release.outputs.month }}.mmdb.gz"
+          if ! curl -fsSL --retry 3 -o db.mmdb.gz "$url"; then
+            echo "::notice::$url not published yet"
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gunzip -t db.mmdb.gz
+          gunzip -c db.mmdb.gz > dbip-country-lite.mmdb
+          # Sanity check: a real country DB is several MB and carries DB-IP metadata.
+          size=$(stat -c %s dbip-country-lite.mmdb)
+          [ "$size" -gt 1000000 ] || { echo "DB too small: $size bytes"; exit 1; }
+          grep -aq 'DBIP-Country-Lite' dbip-country-lite.mmdb
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.release.outputs.skip != 'true' && steps.download.outputs.missing != 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.release.outputs.skip != 'true' && steps.download.outputs.missing != 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        if: steps.release.outputs.skip != 'true' && steps.download.outputs.missing != 'true'
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.release.outputs.image }}:${{ steps.release.outputs.month }}
+            ${{ steps.release.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.title=dbip-country-lite
+            org.opencontainers.image.description=DB-IP IP to Country Lite (${{ steps.release.outputs.month }}) as /dbip-country-lite.mmdb. IP Geolocation by DB-IP (https://db-ip.com), CC BY 4.0.
+            org.opencontainers.image.licenses=CC-BY-4.0
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.release.outputs.month }}
