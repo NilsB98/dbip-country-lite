@@ -26,7 +26,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Pick release
         id: release
@@ -59,17 +59,17 @@ jobs:
           [ "$size" -gt 1000000 ] || { echo "DB too small: $size bytes"; exit 1; }
           grep -aq 'DBIP-Country-Lite' dbip-country-lite.mmdb
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         if: steps.release.outputs.skip != 'true' && steps.download.outputs.missing != 'true'
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: steps.release.outputs.skip != 'true' && steps.download.outputs.missing != 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         if: steps.release.outputs.skip != 'true' && steps.download.outputs.missing != 'true'
         with:
           context: .
